@@ -1,0 +1,20 @@
+# Dependencias y builds
+backend/venv/
+.venv/
+node_modules/
+frontend/dist/
+
+# Datos de usuarios: imágenes subidas y base local
+backend/temp/
+*.db
+
+# Secretos
+.env
+.env.*
+
+# Caches y editor
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+.claude/
