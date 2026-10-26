@@ -1,36 +1,42 @@
+"""
+Pedagogical layer: frames the solver's raw steps the way a professor would,
+with an introduction per topic and a closing tip.
+"""
+
+INTROS = {
+    "Aritmética": "Resolvamos la cuenta respetando la jerarquía de operaciones.",
+    "Álgebra": "Abordemos esta expresión algebraica paso a paso.",
+    "Inecuaciones": "En una inecuación buscamos un conjunto de valores, no un único número.",
+    "Sistemas de Ecuaciones": "Buscamos los valores que satisfacen todas las ecuaciones a la vez.",
+    "Análisis de Funciones": "Estudiemos la función: dominio, raíces, extremos y su gráfica.",
+    "Trigonometría": "Usaremos identidades y valores notables de las funciones trigonométricas.",
+    "Ecuaciones Trigonométricas": "Resolvemos la ecuación recordando que las funciones trigonométricas son periódicas.",
+    "Límites": "Analicemos a qué valor se acerca la función, atentos a posibles indeterminaciones.",
+    "Cálculo Diferencial": "Para resolver esta derivada, aplicaremos las reglas de derivación correspondientes.",
+    "Cálculo Integral": "Comencemos analizando la estructura del integrando para elegir la técnica adecuada.",
+    "Series y Sucesiones": "Estudiemos el término general para decidir si la serie converge y, si es posible, su suma.",
+    "Ecuaciones Diferenciales": "Primero identificamos el tipo de ecuación diferencial; eso determina el método.",
+    "Álgebra Lineal": "Analicemos las propiedades de las matrices dadas.",
+    "Física": "Identifiquemos la ley física, los datos y la incógnita.",
+}
+
+TIPS = {
+    "Cálculo Integral": "Tip: podés verificar cualquier primitiva derivándola.",
+    "Cálculo Diferencial": "Tip: antes de derivar, conviene simplificar la expresión si es posible.",
+    "Límites": "Tip: si al sustituir aparece 0/0 o ∞/∞, probá factorizar, racionalizar o L'Hôpital.",
+    "Ecuaciones Diferenciales": "Tip: sustituí la solución en la ecuación para verificarla.",
+    "Física": "Tip: revisá que las unidades del resultado sean coherentes con la magnitud buscada.",
+    "Inecuaciones": "Tip: al multiplicar o dividir por un número negativo, el sentido de la desigualdad se invierte.",
+}
+
+
 def enhance_explanation(domain: str, raw_steps: list) -> list:
-    """
-    Pedagogical engine that enhances raw solver steps with 
-    professor-like explanations in Spanish based on the domain.
-    """
-    enhanced_steps = []
-    
     if not raw_steps:
         return ["No se pudieron generar pasos detallados para este problema."]
-        
-    # Introduction templates based on domain
-    intros = {
-        "Cálculo Integral": "Comencemos analizando la estructura de la integral proporcionada.",
-        "Cálculo Diferencial": "Para resolver esta derivada, aplicaremos las reglas de derivación correspondientes.",
-        "Álgebra": "Abordemos esta ecuación algebraica paso a paso.",
-        "Ecuaciones Diferenciales": "Resolveremos esta ecuación diferencial identificando primero su tipo (separable, lineal, exacta, etc.).",
-        "Álgebra Lineal": "Analicemos las propiedades de las matrices o vectores dados.",
-        "Cinemática": "Para este problema de movimiento, identificaremos primero las variables conocidas.",
-        "Dinámica": "Aplicaremos las leyes de Newton para comprender las fuerzas involucradas."
-    }
-    
-    # Add intro
-    intro = intros.get(domain, "Vamos a resolver este problema matemático paso a paso.")
-    enhanced_steps.append(f"**Nota del Profesor:** {intro}")
-    
-    # Add actual steps with pedagogical connective tissue
-    for idx, step in enumerate(raw_steps):
-        # Add a subtle pedagogical transition for intermediate steps
-        if idx == len(raw_steps) // 2 and len(raw_steps) > 3:
-            enhanced_steps.append("Llegados a este punto, simplificamos la expresión obtenida:")
-        enhanced_steps.append(step)
-        
-    # Add conclusion
-    enhanced_steps.append("Verifica el resultado final asegurándote de comprender cada transformación algebraica. ¡Buen trabajo!")
-    
-    return enhanced_steps
+
+    intro = INTROS.get(domain, "Vamos a resolver este problema paso a paso.")
+    steps = [f"**Nota del Profesor:** {intro}", *raw_steps]
+    tip = TIPS.get(domain)
+    if tip:
+        steps.append(tip)
+    return steps

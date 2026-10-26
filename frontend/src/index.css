@@ -8,14 +8,29 @@
   body {
     @apply bg-background text-white font-sans antialiased;
   }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary/70 ring-offset-2 ring-offset-background;
+  }
 }
 
 @layer utilities {
   .glass-panel {
     @apply bg-surface/80 backdrop-blur-md border border-white/10 shadow-xl rounded-2xl;
   }
-  
+
   .text-gradient {
     @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
   }
+
+  .label {
+    @apply text-xs text-gray-400 uppercase tracking-widest font-semibold;
+  }
+}
+
+/* KaTeX: long formulas scroll instead of overflowing on phones */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
 }

@@ -1,86 +1,52 @@
 /**
- * StepRenderer — renderiza un paso que mezcla texto español y fórmulas LaTeX.
+ * StepRenderer — renderiza un paso que mezcla texto en español y fórmulas LaTeX.
  *
- * Soporta:
  *   $$...$$ → bloque matemático centrado
  *   $...$   → fórmula inline
- *   **...**  → negrita
- *   texto normal → párrafo sin tocar KaTeX
+ *   **...** → negrita
+ *   `...`   → código
+ *   texto normal → React lo escapa, nunca pasa por KaTeX
  */
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
+import { renderLatex } from './Latex';
 
-function renderLatex(latex, displayMode) {
-  try {
-    return katex.renderToString(latex.trim(), {
-      displayMode,
-      throwOnError: false,
-      strict: false,
-    });
-  } catch {
-    return `<code>${latex}</code>`;
-  }
-}
+const TOKEN = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|\*\*[^*]+\*\*|`[^`]+`)/g;
 
 function parseSegments(text) {
   const segments = [];
-  // Match $$...$$ (display), $...$ (inline), **...** (bold)
-  const re = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|\*\*[^*]+\*\*)/g;
   let last = 0;
-  let match;
-
-  while ((match = re.exec(text)) !== null) {
-    // plain text before match
-    if (match.index > last) {
-      segments.push({ type: 'text', content: text.slice(last, match.index) });
-    }
+  for (const match of text.matchAll(TOKEN)) {
+    if (match.index > last) segments.push({ type: 'text', content: text.slice(last, match.index) });
     const raw = match[0];
-    if (raw.startsWith('$$')) {
-      segments.push({ type: 'display', content: raw.slice(2, -2) });
-    } else if (raw.startsWith('$')) {
-      segments.push({ type: 'inline', content: raw.slice(1, -1) });
-    } else if (raw.startsWith('**')) {
-      segments.push({ type: 'bold', content: raw.slice(2, -2) });
-    }
+    if (raw.startsWith('$$')) segments.push({ type: 'display', content: raw.slice(2, -2) });
+    else if (raw.startsWith('$')) segments.push({ type: 'inline', content: raw.slice(1, -1) });
+    else if (raw.startsWith('**')) segments.push({ type: 'bold', content: raw.slice(2, -2) });
+    else segments.push({ type: 'code', content: raw.slice(1, -1) });
     last = match.index + raw.length;
   }
-
-  if (last < text.length) {
-    segments.push({ type: 'text', content: text.slice(last) });
-  }
-
+  if (last < text.length) segments.push({ type: 'text', content: text.slice(last) });
   return segments;
 }
 
-export default function StepRenderer({ text = '', className = '' }) {
-  const segments = parseSegments(text);
+function Segment({ seg }) {
+  switch (seg.type) {
+    case 'display':
+      return <span className="block my-2 overflow-x-auto text-center" dangerouslySetInnerHTML={{ __html: renderLatex(seg.content, true) }} />;
+    case 'inline':
+      return <span dangerouslySetInnerHTML={{ __html: renderLatex(seg.content, false) }} />;
+    case 'bold':
+      // Bold text may itself contain inline math: **Solución:** $x = 2$
+      return <strong className="text-white">{parseSegments(seg.content).map((s, i) => <Segment key={i} seg={s} />)}</strong>;
+    case 'code':
+      return <code className="px-1.5 py-0.5 rounded bg-black/30 text-xs font-mono text-gray-300 break-all">{seg.content}</code>;
+    default:
+      return <span>{seg.content}</span>;
+  }
+}
 
+export default function StepRenderer({ text = '', className = '' }) {
   return (
     <span className={className}>
-      {segments.map((seg, i) => {
-        if (seg.type === 'display') {
-          return (
-            <span
-              key={i}
-              className="block my-2 overflow-x-auto text-center"
-              dangerouslySetInnerHTML={{ __html: renderLatex(seg.content, true) }}
-            />
-          );
-        }
-        if (seg.type === 'inline') {
-          return (
-            <span
-              key={i}
-              dangerouslySetInnerHTML={{ __html: renderLatex(seg.content, false) }}
-            />
-          );
-        }
-        if (seg.type === 'bold') {
-          return <strong key={i}>{seg.content}</strong>;
-        }
-        // plain text — never goes through KaTeX
-        return <span key={i}>{seg.content}</span>;
-      })}
+      {parseSegments(text).map((seg, i) => <Segment key={i} seg={seg} />)}
     </span>
   );
 }

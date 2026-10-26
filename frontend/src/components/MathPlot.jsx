@@ -1,54 +1,44 @@
 /**
- * MathPlot — wrapper de Plotly compatible con React 19 + Vite.
- * Usa plotly.js-dist-min directamente sin react-plotly.js.
+ * MathPlot — Plotly (plotly.js-dist-min) cargado bajo demanda, compatible con React 19.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+const AXIS = { gridcolor: '#374151', zerolinecolor: '#6366f1', linecolor: '#4b5563' };
 
 export default function MathPlot({ data, layout, style }) {
   const ref = useRef(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!ref.current || !data) return;
+    const el = ref.current;
+    if (!el || !data) return;
+    let cancelled = false;
+    let Plotly;
 
-    import('plotly.js-dist-min').then((Plotly) => {
-      const mergedLayout = {
-        ...(layout || {}),
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e5e7eb', family: 'Inter, sans-serif', size: 12 },
-        margin: { t: 30, r: 20, b: 40, l: 50 },
-        xaxis: {
-          ...(layout?.xaxis || {}),
-          gridcolor: '#374151',
-          zerolinecolor: '#6366f1',
-          linecolor: '#4b5563',
-        },
-        yaxis: {
-          ...(layout?.yaxis || {}),
-          gridcolor: '#374151',
-          zerolinecolor: '#6366f1',
-          linecolor: '#4b5563',
-        },
-      };
+    import('plotly.js-dist-min')
+      .then((mod) => {
+        if (cancelled) return;
+        Plotly = mod.default ?? mod;
+        Plotly.newPlot(el, data, {
+          ...(layout || {}),
+          autosize: true,
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor: 'rgba(0,0,0,0)',
+          font: { color: '#e5e7eb', family: 'Inter, sans-serif', size: 12 },
+          margin: { t: 20, r: 20, b: 40, l: 50 },
+          legend: { orientation: 'h', y: -0.28 },
+          xaxis: { ...(layout?.xaxis || {}), ...AXIS },
+          yaxis: { ...(layout?.yaxis || {}), ...AXIS },
+        }, { responsive: true, displayModeBar: false });
+      })
+      .catch(() => !cancelled && setFailed(true));
 
-      Plotly.newPlot(ref.current, data, mergedLayout, {
-        responsive: true,
-        displayModeBar: false,
-      });
-    });
-
-    // Cleanup on unmount
     return () => {
-      import('plotly.js-dist-min').then((Plotly) => {
-        if (ref.current) Plotly.purge(ref.current);
-      });
+      cancelled = true;
+      if (Plotly) Plotly.purge(el);
     };
   }, [data, layout]);
 
-  return (
-    <div
-      ref={ref}
-      style={style || { width: '100%', minHeight: '280px' }}
-    />
-  );
+  if (failed) return <p className="text-sm text-gray-500 p-4">No se pudo cargar el gráfico.</p>;
+  return <div ref={ref} style={style || { width: '100%', minHeight: '300px' }} />;
 }

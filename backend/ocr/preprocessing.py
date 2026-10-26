@@ -1,29 +1,29 @@
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
-def preprocess_image_for_ocr(image_path: str) -> Image.Image:
+MAX_SIDE = 2000
+
+
+def load_image(image_path: str) -> Image.Image:
+    """Open an image respecting EXIF rotation (phone photos) and cap its size."""
+    try:
+        img = Image.open(image_path)
+        img = ImageOps.exif_transpose(img).convert("RGB")
+    except Exception as e:
+        raise ValueError(f"No se pudo abrir la imagen: {e}") from e
+    img.thumbnail((MAX_SIDE, MAX_SIDE))
+    return img
+
+
+def preprocess_for_local_ocr(image: Image.Image) -> Image.Image:
     """
-    Applies noise reduction, grayscale conversion, and adaptive thresholding
-    to prepare the mathematical expression image for the Pix2Tex OCR engine.
+    Noise reduction, grayscale and adaptive thresholding for the local pix2tex model.
+    Vision LLMs (Gemini) get the original image: binarization removes information they use.
     """
-    # Read image using OpenCV
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        # Fallback to PIL if OpenCV fails to read (e.g., unsupported format)
-        try:
-            return Image.open(image_path).convert("L")
-        except Exception as e:
-            raise ValueError(f"Could not read image from {image_path}: {e}")
-
-    # Remove noise
-    img_blurred = cv2.GaussianBlur(img, (5, 5), 0)
-
-    # Adaptive Thresholding for better contrast
-    img_thresh = cv2.adaptiveThreshold(
-        img_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    gray = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
     )
-
-    # Convert back to PIL Image as pix2tex expects PIL Images
-    pil_image = Image.fromarray(img_thresh)
-    return pil_image
+    return Image.fromarray(thresh)

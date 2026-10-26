@@ -1,25 +1,36 @@
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Any, Literal, Optional
 
-class ExerciseBase(BaseModel):
-    extracted_latex: str
-    domain_classification: Optional[str] = None
-    symbolic_representation: Optional[str] = None
+from pydantic import BaseModel
 
-class ExerciseCreate(ExerciseBase):
-    pass
+Mode = Literal["Teacher", "Exam"]
 
-class ExerciseResponse(ExerciseBase):
+
+class HistoryItem(BaseModel):
     id: int
-    solution_steps_json: Optional[str] = None
-    final_result_latex: Optional[str] = None
-    graph_data_json: Optional[str] = None
+    extracted_latex: str
+    domain_classification: str
+    final_result_latex: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
 
-class SolveRequest(BaseModel):
-    latex_expression: str
-    mode: str = "Teacher" # "Teacher" or "Exam"
+class HistoryPage(BaseModel):
+    items: list[HistoryItem]
+    total: int
+
+
+class SolveResponse(BaseModel):
+    id: Optional[int] = None
+    extracted_latex: str
+    domain_classification: str
+    steps: list[str]
+    final_result_latex: str
+    graph_data: Optional[dict[str, Any]] = None
+    solved: bool = True
+    created_at: Optional[datetime] = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    ocr: dict[str, bool]

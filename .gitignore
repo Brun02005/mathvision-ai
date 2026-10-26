@@ -16,5 +16,9 @@ backend/temp/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
 .vscode/
 .claude/
+
+# Notas personales
+.mentor/
