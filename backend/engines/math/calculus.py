@@ -607,6 +607,17 @@ def solve_derivative(latex_expr: str) -> dict:
     if factored != result and sp.count_ops(factored) < sp.count_ops(result):
         steps.append(f"Forma factorizada: $${sp.latex(factored)}$$")
 
+    verified = _numeric_derivative_check(expr, var, order, result)
+    if verified:
+        steps.append("✓ Verificación numérica: la pendiente medida sobre la función en varios puntos "
+                     "coincide con la derivada obtenida.")
+    elif verified is False:
+        logger.warning(f"Numeric check disagrees with derivative of {expr}: {result}")
+        return {"symbolic": str(sp.Derivative(expr, (var, order))), "final_latex": r"\text{No se pudo verificar}",
+                "steps": steps[:-1] + ["⚠ El cálculo simbólico y la verificación numérica no coinciden, "
+                                       "así que no mostramos un resultado que podría ser incorrecto."],
+                "answer": None, "verified": False, "show_graph": False}
+
     graph = None
     if expr.free_symbols == {var}:
         label = "f'(x)" if order == 1 else f"f^({order})(x)"
@@ -617,6 +628,7 @@ def solve_derivative(latex_expr: str) -> dict:
         "final_latex": sp.latex(result),
         "steps": steps,
         "answer": result,
+        "verified": verified,
         "show_graph": graph is not None,
         "graph": graph,
     }
@@ -735,6 +747,40 @@ def solve_limit(latex_expr: str) -> dict:
         "show_graph": graph is not None,
         "graph": graph,
     }
+
+
+_DERIVATIVE_PROBES = ("0.37", "0.81", "1.43", "2.29", "-0.58", "-1.67")
+
+
+def _numeric_derivative_check(expr, var, order, result) -> bool | None:
+    """
+    Differentiate numerically (mpmath, 40 digits), without using SymPy's rules, and compare
+    with the symbolic derivative at a few points where both are defined. The probes avoid
+    integers and simple fractions, where singularities and kinks usually sit.
+    """
+    if expr.free_symbols != {var} or result.has(sp.Derivative) or not result.free_symbols <= {var}:
+        return None
+    import mpmath
+    try:
+        f = sp.lambdify(var, expr, "mpmath")
+        df = sp.lambdify(var, result, "mpmath")
+    except Exception:
+        return None
+    agree = 0
+    with mpmath.workdps(40):
+        for probe in _DERIVATIVE_PROBES:
+            p = mpmath.mpf(probe)
+            try:
+                exact = mpmath.mpc(df(p))
+                numeric = mpmath.mpc(mpmath.diff(f, p, order))
+            except (ValueError, ZeroDivisionError, TypeError, OverflowError):
+                continue  # outside the domain (ln of a negative, a pole): try another point
+            if not (mpmath.isfinite(exact) and mpmath.isfinite(numeric)):
+                continue
+            if abs(exact - numeric) > mpmath.mpf("1e-12") * (1 + abs(exact)):
+                return False
+            agree += 1
+    return True if agree >= 2 else None
 
 
 def _numeric_limit_check(expr, var, point, direction, result) -> bool | None:

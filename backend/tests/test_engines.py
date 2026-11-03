@@ -67,6 +67,19 @@ def test_derivative_graphs_function_and_derivative():
     assert len(graph["data"]) == 2
 
 
+@pytest.mark.parametrize("latex", [
+    r"\frac{d}{dx}(x^2 \sin(x))", r"\frac{d}{dx}|x|", r"\frac{d}{dx}(x^x)", r"\frac{d^2}{dx^2}(e^{x} \cos(x))",
+])
+def test_derivatives_are_verified_numerically(latex):
+    assert calculus.solve_derivative(latex)["verified"] is True
+
+
+def test_derivative_check_catches_a_wrong_result():
+    x = sp.Symbol("x")
+    assert calculus._numeric_derivative_check(x**2 * sp.sin(x), x, 1, 2 * x * sp.cos(x)) is False
+    assert calculus._numeric_derivative_check(sp.sin(x), x, 2, -sp.sin(x)) is True
+
+
 def test_function_analysis_draws_its_asymptotes():
     graph = solve_latex_expression(r"f(x) = \frac{x^2}{x-1}")["graph_data"]
     names = [trace["name"] for trace in graph["data"]]

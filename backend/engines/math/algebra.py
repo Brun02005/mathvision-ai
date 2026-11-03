@@ -202,6 +202,7 @@ def _solve_single_equation(eq) -> dict:
     real_var = sp.Symbol(var.name, real=True)
     expr_real = expr.xreplace({var: real_var})
     solution_set = None
+    check_eq = eq
     if expr_real.has(sp.Abs):
         steps.append("Por el **valor absoluto**, separamos en casos según el signo de su argumento "
                      r"($|u| = u$ si $u \geq 0$, $|u| = -u$ si $u < 0$).")
@@ -210,8 +211,21 @@ def _solve_single_equation(eq) -> dict:
         solution_set = _safe_solveset(expr_real, real_var, sp.Interval.Ropen(0, 2 * sp.pi))
         if isinstance(solution_set, sp.FiniteSet) and solution_set:
             steps.append(r"Buscamos primero las soluciones en una vuelta, $[0, 2\pi)$.")
+    elif any(_odd_root(t) for t in expr_real.atoms(sp.Pow)):
+        solution_set = _solve_odd_roots(expr_real, real_var)
+        if solution_set is not None:
+            steps.append(r"Con raíces de índice impar la base puede ser negativa ($\sqrt[3]{-8} = -2$): "
+                         "separamos en casos según el signo de la base.")
+            # Check against the real roots too: SymPy's principal (-8)^(2/3) is complex, not 4.
+            # From the simplified `expr`: in the parsed `eq` the exponent can still be an unevaluated 2·3⁻¹
+            check_eq = sp.Eq(_real_odd_powers(expr), 0)
     if solution_set is not None:
         solution_set = solution_set.xreplace({real_var: var})
+    if solution_set == sp.S.EmptySet and any(satisfies(check_eq, {var: r}) for r in _numeric_roots(expr, var)):
+        # solveset says "no solution" for |x|^(2/3) = 4, whose solutions are ±8: a numeric root that
+        # checks out proves it wrong, so let the general solver below find them
+        logger.warning(f"solveset missed real solutions of {eq}")
+        solution_set = None
     if solution_set == sp.S.EmptySet:
         reason = ("Las funciones seno y coseno solo toman valores entre $-1$ y $1$."
                   if tipo == "ecuación trigonométrica" and expr.has(sp.sin, sp.cos) else None)
@@ -241,7 +255,7 @@ def _solve_single_equation(eq) -> dict:
     # extraneous solutions (log or root of a negative number, division by zero).
     checks = {}
     for s in solutions:
-        checks[s] = satisfies(eq, {var: s})
+        checks[s] = satisfies(check_eq, {var: s})
     discarded = [s for s, ok in checks.items() if ok is False]
     for s in discarded:
         steps.append(f"Descartamos ${var_l} = {sp.latex(s)}$: no verifica la ecuación original (queda fuera del dominio).")
@@ -327,6 +341,45 @@ def _solve_single_equation(eq) -> dict:
         "show_graph": graph is not None,
         "graph": graph,
     }
+
+
+def _odd_root(t) -> bool:
+    """u^(p/q) with q odd and a base that depends on the variable, like ∛x or x^(2/3)."""
+    return t.is_Pow and t.exp.is_Rational and t.exp.q % 2 == 1 and t.exp.q > 1 and not t.base.is_number
+
+
+def _real_odd_powers(e):
+    """u^(p/q) as the calculator reads it for a negative u: (-8)^(2/3) = 4, not SymPy's complex principal root."""
+    return e.replace(_odd_root, lambda t: (sp.Abs(t.base) ** t.exp if t.exp.p % 2 == 0
+                                          else sp.sign(t.base) * sp.Abs(t.base) ** t.exp))
+
+
+def _solve_odd_roots(expr, var):
+    """
+    Solve over the reals with real odd roots, by cases on the sign of the base: where it is
+    negative, u^(p/q) = (-1)^p · (-u)^(p/q). SymPy alone only finds the solutions with u ≥ 0.
+    """
+    bases = {t.base for t in expr.atoms(sp.Pow) if _odd_root(t)}
+    if len(bases) != 1:
+        return None
+    base = bases.pop()
+    try:
+        positive = sp.solve_univariate_inequality(base >= 0, var, relational=False)
+        negative = sp.solve_univariate_inequality(base < 0, var, relational=False)
+        if negative == sp.S.EmptySet:
+            return None  # ∛(x²): the base is never negative, the usual solver handles it
+        mirrored = expr.replace(lambda t: _odd_root(t) and t.base == base,
+                                lambda t: (-1) ** t.exp.p * (-base) ** t.exp)
+        found = sp.Union(sp.solveset(expr, var, positive), sp.solveset(mirrored, var, negative))
+    except Exception as e:
+        logger.warning(f"odd-root cases failed: {e}")
+        return None
+    # Empty is not trusted: SymPy's solveset misses solutions of |x|^(2/3) = 4, so "no solution"
+    # is left for the usual path (which checks every candidate) to decide
+    if not isinstance(found, sp.FiniteSet) or not found:
+        return None
+    # A solution found in floating point (1.0) is reported exactly when it is one
+    return sp.FiniteSet(*(sp.nsimplify(s) if s.is_Float else s for s in found))
 
 
 def _safe_solveset(expr, var, domain):

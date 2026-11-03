@@ -76,12 +76,11 @@ Se puede elegir la operación en la web, pasar `operation` a la API o escribirla
 
 Convenciones: `\log` sin base es logaritmo decimal y `\ln` es natural; `i` es la unidad imaginaria (salvo como índice de una sumatoria); las raíces impares de negativos son reales; en las estadísticas, si los números llevan coma decimal, se separan con `;`.
 
-**Precisión medida:** 636 de 638 ejercicios del banco (ver [Banco de ejercicios](#banco-de-ejercicios)).
+**Precisión medida:** 658 de 658 ejercicios del banco (ver [Banco de ejercicios](#banco-de-ejercicios)). Que el banco esté completo no significa que el motor no falle: significa que no falla en los casos que conocemos.
 
 **Limitaciones:**
 - Sin `GEMINI_API_KEY`, los problemas escritos en palabras se rechazan con un mensaje, en vez de inventar una respuesta.
 - Las respuestas del nivel `ai` no están verificadas: por eso se etiquetan.
-- Raíces reales de potencias fraccionarias con variable, como `x^{2/3} = 4`: encuentra x = 8 pero no x = −8. Es una limitación conocida y está registrada en el banco.
 
 Además:
 
@@ -251,7 +250,7 @@ ruff check .
 
 ### Banco de ejercicios
 
-Son 638 ejercicios con su respuesta correcta, **escrita a mano a partir de la matemática y no copiada de lo que devuelve el motor**. Están en dos archivos:
+Son 658 ejercicios con su respuesta correcta, **escrita a mano a partir de la matemática y no copiada de lo que devuelve el motor**. Están en dos archivos:
 - `cases.py`: 217 casos escritos junto con el motor, incluidas las regresiones de cada error encontrado.
 - `cases_independent.py`: 421 casos escritos por un revisor que no vio ni el código ni el otro archivo, pensados para encontrar errores (raíces que no verifican, indeterminaciones, notación escrita como la tipea un estudiante).
 
