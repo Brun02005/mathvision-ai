@@ -1,15 +1,23 @@
 import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Link } from 'react-router-dom';
-import { Calculator, Settings as SettingsIcon, History as HistoryIcon, UploadCloud, BookOpen, GraduationCap, Menu, X } from 'lucide-react';
+import { Calculator, Settings as SettingsIcon, History as HistoryIcon, UploadCloud, BookOpen, GraduationCap, Menu, X, UserRound, Loader2 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import HistoryDetail from './pages/HistoryDetail';
 import Settings from './pages/Settings';
+import Account from './pages/Account';
+import Login from './pages/Login';
+import { Terms, Privacy } from './pages/Legal';
+import Withdrawal from './pages/Withdrawal';
+import ErrorBoundary from './components/ErrorBoundary';
+import LegalLinks from './components/LegalLinks';
 import { useSettings } from './context/SettingsContext';
+import { useAuth } from './context/AuthContext';
 
 const NAV = [
   { to: '/', label: 'Resolver Problema', icon: UploadCloud, end: true },
   { to: '/history', label: 'Historial', icon: HistoryIcon },
+  { to: '/cuenta', label: 'Mi cuenta', icon: UserRound },
   { to: '/settings', label: 'Configuración', icon: SettingsIcon },
 ];
 
@@ -56,6 +64,7 @@ function Sidebar({ open, onClose }) {
           ))}
         </nav>
         <ModeToggle />
+        <LegalLinks className="px-6 pb-4" />
       </aside>
     </>
   );
@@ -72,10 +81,36 @@ function NotFound() {
 }
 
 export default function App() {
+  return (
+    <Router>
+      <ErrorBoundary>
+        <Routes>
+          {/* Public: consumer law requires them without registration */}
+          <Route path="/terminos" element={<Terms />} />
+          <Route path="/privacidad" element={<Privacy />} />
+          <Route path="/arrepentimiento" element={<Withdrawal />} />
+          <Route path="/*" element={<Private />} />
+        </Routes>
+      </ErrorBoundary>
+    </Router>
+  );
+}
+
+function Private() {
+  const { session, loading } = useAuth();
+
+  if (loading) {
+    return <div className="h-screen flex items-center justify-center bg-background"><Loader2 className="animate-spin text-primary" /></div>;
+  }
+  if (!session) return <Login />;
+  return <Shell />;
+}
+
+function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <Router>
+    <>
       <div className="flex h-screen overflow-hidden bg-background">
         <Sidebar open={menuOpen} onClose={() => setMenuOpen(false)} />
 
@@ -93,11 +128,12 @@ export default function App() {
               <Route path="/history" element={<History />} />
               <Route path="/history/:id" element={<HistoryDetail />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/cuenta" element={<Account />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </div>
         </main>
       </div>
-    </Router>
+    </>
   );
 }

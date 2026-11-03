@@ -31,7 +31,7 @@ def test_calculus_integral():
     (r"\int x e^{x} dx", r"\left(x - 1\right) e^{x} + C"),
     (r"\int 2x \cos(x^2) dx", r"\sin{\left(x^{2} \right)} + C"),
     (r"\int_{0}^{\infty} e^{-x} dx", "1"),
-    (r"\int_{1}^{2} \frac{1}{x} dx", r"\log{\left(2 \right)} \approx 0.693147"),
+    (r"\int_{1}^{2} \frac{1}{x} dx", r"\ln{\left(2 \right)} \approx 0.693147"),
 ])
 def test_integrals(latex, expected):
     assert final(latex) == expected
@@ -65,6 +65,19 @@ def test_derivatives(latex, expected):
 def test_derivative_graphs_function_and_derivative():
     graph = solve_latex_expression(r"\frac{d}{dx}(x^2)")["graph_data"]
     assert len(graph["data"]) == 2
+
+
+def test_function_analysis_draws_its_asymptotes():
+    graph = solve_latex_expression(r"f(x) = \frac{x^2}{x-1}")["graph_data"]
+    names = [trace["name"] for trace in graph["data"]]
+    assert "asíntota x = 1" in names and "asíntota y = x + 1" in names
+
+
+def test_function_analysis_covers_every_section():
+    steps = " ".join(algebra.analyze(r"\frac{x^2}{x-1}")["steps"])
+    for section in ("Dominio", "Paridad", "Raíces", "Continuidad", "Asíntotas", "Crecimiento",
+                    "Concavidad", "Positividad", "Imagen"):
+        assert section in steps
 
 
 def test_product_rule_is_named():
@@ -205,3 +218,48 @@ def test_physics_missing_data():
 def test_garbage_input_does_not_raise():
     res = solve_latex_expression(r"\frac{{")
     assert res["solved"] is False
+
+
+# ── Solver failures are reported, never disguised as "no solution" ──────────
+
+def _raise(*args, **kwargs):
+    raise NotImplementedError("simulated SymPy failure")
+
+
+def test_solver_failure_is_not_reported_as_no_solution(monkeypatch):
+    monkeypatch.setattr(algebra.sp, "solve", _raise)
+    monkeypatch.setattr(algebra.sp, "nsolve", _raise)
+    res = algebra.solve_equation("x^2 = 4")
+    assert res["ok"] is False
+    assert res["final_latex"] == r"\text{No se pudo resolver}"
+
+
+def test_numeric_fallback_is_flagged_as_partial(monkeypatch):
+    monkeypatch.setattr(algebra.sp, "solve", _raise)
+    res = algebra.solve_equation("x^2 = 4")
+    assert res.get("ok", True)
+    assert any("Puede haber otras" in s for s in res["steps"])
+
+
+def test_genuinely_impossible_equation_says_no_solution():
+    assert algebra.solve_equation("x + 1 = x")["final_latex"] == r"\text{Sin solución}"
+
+
+def test_physics_solver_failure_is_reported(monkeypatch):
+    monkeypatch.setattr(physics_engine.sp, "solve", _raise)
+    res = physics_engine.solve_physics("F = m a, m = 10, a = 5")
+    assert res["ok"] is False
+
+
+def test_requested_statistic_is_the_one_shown():
+    # "mediana" also starts with "media": the final answer must be the median, not the mean
+    from pipeline import run_solver
+    _, res = run_solver("mediana de 3, 1, 4, 1, 5")
+    assert res["final_latex"] == r"\tilde{x} = 3"
+
+
+def test_misread_latex_is_rejected_not_solved():
+    # A word-like symbol means the LaTeX was misread: never solve (and "verify") it
+    from engines.math.common import parse_math
+    assert parse_math(r"\mathbb{Q} x") is None or not any(
+        s.name.isalpha() and len(s.name) > 1 for s in parse_math(r"\mathbb{Q} x").free_symbols)

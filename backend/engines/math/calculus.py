@@ -11,7 +11,9 @@ import logging
 
 import sympy as sp
 
-from engines.math.common import clean_latex, parse_math, pick_variable, error_result
+from engines.math.common import (
+    clean_latex, parse_math, pick_variable, error_result, same_function, split_top_level,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ def solve_integral(latex_expr: str) -> dict:
     parsed = parse_math(cleaned)
 
     if isinstance(parsed, sp.Integral):
+        if len(parsed.limits) > 1 or isinstance(parsed.function, sp.Integral):
+            return _solve_multiple(parsed)
         integrand = parsed.function
         lim = parsed.limits[0]
         var = lim[0]
@@ -47,6 +51,13 @@ def solve_integral(latex_expr: str) -> dict:
 def _solve_with_steps(integrand, var, limits) -> dict:
     """Solve the integral and build educational steps."""
     is_def = limits is not None
+    original_var = var
+    if integrand.has(sp.Abs, sp.sign):
+        # |x| only integrates cleanly over the reals
+        var = sp.Symbol(var.name, real=True)
+        integrand = integrand.xreplace({original_var: var})
+        if is_def:
+            limits = (var, limits[1], limits[2])
     integrand_s = sp.simplify(integrand)
     integrand_l = sp.latex(integrand_s)
     v = sp.latex(var)
@@ -62,23 +73,33 @@ def _solve_with_steps(integrand, var, limits) -> dict:
         antideriv = None
 
     steps = []
+    inner_singularities = []
     if is_def:
         _, a, b = limits
         a_l, b_l = sp.latex(a), sp.latex(b)
         steps.append(f"Tenemos la **integral definida**: $$\\int_{{{a_l}}}^{{{b_l}}} {integrand_l}\\, d{v}$$")
         if a.has(sp.oo, -sp.oo) or b.has(sp.oo, -sp.oo):
             steps.append("Es una **integral impropia** (un límite es infinito): la calculamos como límite de integrales definidas.")
+        inner_singularities = _singularities_in(integrand_s, var, a, b)
+        if inner_singularities:
+            pts = ",\\; ".join(f"{v} = {sp.latex(p)}" for p in inner_singularities)
+            steps.append(f"El integrando **no está acotado** en ${pts}$, dentro del intervalo: es una **integral impropia** "
+                         "y no se puede aplicar Barrow directamente.")
     else:
         steps.append(f"Tenemos la **integral indefinida**: $$\\int {integrand_l}\\, d{v}$$")
 
     steps.append(f"**Técnica:** {technique}")
     steps.extend(sub_steps)
 
+    antideriv_ok = None
     if antideriv is not None:
         antideriv = sp.simplify(antideriv)
-        steps.append(f"**Primitiva:** $$F({v}) = {sp.latex(antideriv)}$$")
-        steps.append(f"Verificación: derivando $F$ se recupera el integrando, $F'({v}) = {integrand_l}$.")
+        steps.append(f"**Primitiva:** $$F({v}) = {sp.latex(_with_abs_logs(antideriv, integrand_s, var))}$$")
+        antideriv_ok = _is_antiderivative(antideriv, integrand_s, var)
+        if antideriv_ok:
+            steps.append(f"✓ Verificación: derivando $F$ se recupera el integrando, $F'({v}) = {integrand_l}$.")
 
+    verified = antideriv_ok
     if is_def:
         try:
             result = sp.simplify(sp.integrate(integrand_s, limits))
@@ -89,15 +110,24 @@ def _solve_with_steps(integrand, var, limits) -> dict:
             result = sp.N(result, 8)
             steps.append("No existe una primitiva elemental; calculamos el valor **numéricamente**.")
         _, a, b = limits
-        if antideriv is not None and not (a.has(sp.oo, -sp.oo) or b.has(sp.oo, -sp.oo)):
+        diverges = (result in (sp.oo, -sp.oo, sp.zoo, sp.nan) or result.has(sp.oo, sp.zoo, sp.nan, sp.AccumBounds))
+        if antideriv is not None and not diverges and not inner_singularities and not (a.has(sp.oo, -sp.oo) or b.has(sp.oo, -sp.oo)):
             Fb = sp.simplify(antideriv.subs(var, b))
             Fa = sp.simplify(antideriv.subs(var, a))
             steps.append(
                 f"Aplicamos la **Regla de Barrow** (Teorema Fundamental del Cálculo): "
                 f"$$F({sp.latex(b)}) - F({sp.latex(a)}) = {sp.latex(Fb)} - \\left({sp.latex(Fa)}\\right) = {sp.latex(result)}$$"
             )
-        if result in (sp.oo, -sp.oo, sp.zoo) or result.has(sp.oo):
-            steps.append("La integral **diverge**.")
+        if diverges:
+            steps.append("La integral **diverge** (no converge a un número finito).")
+            steps.append("**Resultado final:** la integral diverge.")
+            return {"symbolic": str(sp.Integral(integrand_s, limits)), "final_latex": r"\text{Diverge}",
+                    "steps": steps, "answer": "diverge", "show_graph": False}
+        else:
+            answer = result
+            verified = _numeric_integral_check(sp.Integral(integrand_s, limits), result)
+            if verified:
+                steps.append("✓ Verificación numérica: la integración numérica da el mismo valor.")
         final_l = sp.latex(result)
         if result.is_number and not result.is_Rational and result.is_finite:
             final_l += f" \\approx {sp.latex(sp.N(result, 6))}"
@@ -107,9 +137,19 @@ def _solve_with_steps(integrand, var, limits) -> dict:
                 "symbolic": str(sp.Integral(integrand_s, var)),
                 "final_latex": r"\text{Sin primitiva elemental}",
                 "steps": steps + ["Esta función **no tiene primitiva expresable con funciones elementales**."],
+                "answer": "no_elemental",
                 "show_graph": False,
             }
-        final_l = sp.latex(antideriv) + " + C"
+        if antideriv_ok is False:
+            return {
+                "symbolic": str(sp.Integral(integrand_s, var)),
+                "final_latex": r"\text{No se pudo verificar}",
+                "steps": steps + ["⚠ La primitiva obtenida no superó la verificación, así que no la mostramos como resultado."],
+                "show_graph": False,
+                "ok": False,
+            }
+        answer = antideriv
+        final_l = sp.latex(_with_abs_logs(antideriv, integrand_s, var)) + " + C"
 
     steps.append(f"**Resultado final:** $${final_l}$$")
 
@@ -130,9 +170,94 @@ def _solve_with_steps(integrand, var, limits) -> dict:
         "symbolic": str(sp.Integral(integrand_s, limits or var)),
         "final_latex": final_l,
         "steps": steps,
+        "answer": answer.xreplace({var: original_var}) if isinstance(answer, sp.Basic) else answer,
+        "verified": verified,
         "show_graph": graph is not None,
         "graph": graph,
     }
+
+
+def _singularities_in(f, var, a, b) -> list:
+    """Points of [a, b] where the integrand blows up (improper integral of the second kind)."""
+    try:
+        lo, hi = (a, b) if (a < b) == sp.true else (b, a)
+        points = sp.singularities(f, var, sp.Interval(lo, hi))
+    except Exception:
+        return []
+    if not isinstance(points, sp.FiniteSet):
+        return []
+    blowing = []
+    for p in points:
+        try:
+            if any(sp.limit(f, var, p, dir=d).is_finite is False for d in ("+", "-")):
+                blowing.append(p)
+        except Exception:
+            continue
+    return blowing
+
+
+def _with_abs_logs(F, f, var):
+    """
+    ∫ 1/x dx is ln|x| + C over the reals; SymPy writes log(x). For display only (the
+    verified answer keeps SymPy's form): add |·| to logs whose argument can be negative,
+    unless the integrand itself has logs (then the domain already forces a positive argument).
+    """
+    if f.has(sp.log):
+        return F
+    real_var = sp.Symbol(var.name, real=True)
+
+    def fix(e):
+        arg = e.args[0]
+        return e if arg.xreplace({var: real_var}).is_positive or isinstance(arg, sp.Abs) else sp.log(sp.Abs(arg))
+    return F.replace(lambda e: isinstance(e, sp.log), fix)
+
+
+def _is_antiderivative(F, f, var) -> bool | None:
+    try:
+        if sp.simplify(sp.diff(F, var) - f) == 0:
+            return True
+    except Exception:
+        pass
+    return same_function(sp.diff(F, var), f, var)
+
+
+def _numeric_integral_check(integral, value) -> bool | None:
+    """Compare the exact value with numerical quadrature (mpmath)."""
+    try:
+        exact = complex(sp.N(value, 20))
+        numeric = complex(integral.evalf(20))
+    except (TypeError, ValueError):
+        return None
+    return abs(exact - numeric) <= 1e-8 * (1 + abs(exact))
+
+
+def _solve_multiple(parsed) -> dict:
+    """Double / triple integrals, solved from the inside out (Fubini)."""
+    integral = parsed
+    while isinstance(integral.function, sp.Integral):
+        inner = integral.function
+        integral = sp.Integral(inner.function, *inner.limits, *integral.limits)
+    kind = {2: "doble", 3: "triple"}.get(len(integral.limits), "múltiple")
+    steps = [f"Tenemos una **integral {kind}**: $${sp.latex(integral)}$$",
+             "La resolvemos **de adentro hacia afuera** (teorema de Fubini): en cada integral, "
+             "las demás variables se tratan como constantes."]
+    current = integral.function
+    for lim in integral.limits:
+        step_integral = sp.Integral(current, lim)
+        current = sp.simplify(step_integral.doit())
+        if current.has(sp.Integral):
+            return error_result(str(parsed), "Una de las integrales interiores no tiene primitiva elemental.")
+        steps.append(f"Integramos respecto de ${sp.latex(lim[0])}$: $${sp.latex(step_integral)} = {sp.latex(current)}$$")
+    result = current
+    verified = _numeric_integral_check(integral, result) if result.is_number else None
+    if verified:
+        steps.append("✓ Verificación numérica: la integración numérica da el mismo valor.")
+    final = sp.latex(result)
+    if result.is_number and not result.is_Rational and result.is_finite:
+        final += f" \\approx {sp.latex(sp.N(result, 6))}"
+    steps.append(f"**Resultado:** $${final}$$")
+    return {"symbolic": str(integral), "final_latex": final, "steps": steps,
+            "answer": result, "verified": verified, "show_graph": False}
 
 
 def _as_float(v):
@@ -360,16 +485,101 @@ def _derivative_rules(expr, var) -> list[str]:
     return rules
 
 
+_DYDX = re.compile(r"^\s*(?:\\frac\{d\s*([a-z])\}\{d\s*([a-z])\}|d\s*([a-z])\s*/\s*d\s*([a-z])|([a-z])\s*')\s*$")
+
+
+def implicit_request(latex_expr: str):
+    """`x^2 + y^2 = 25, \\frac{dy}{dx}` → (equation, y, x). None if it is not an implicit derivative request."""
+    parts = split_top_level(clean_latex(latex_expr), seps=(",", ";"))
+    if len(parts) != 2:
+        return None
+    for asked, other in (parts, parts[::-1]):
+        m = _DYDX.match(asked)
+        if m and "=" in other and "'" not in other and r"\frac{d" not in other:
+            dep = m.group(1) or m.group(3) or m.group(5)
+            indep = m.group(2) or m.group(4) or "x"
+            return other, sp.Symbol(dep), sp.Symbol(indep)
+    return None
+
+
+def solve_implicit_derivative(latex_expr: str) -> dict:
+    eq_s, y, x = implicit_request(latex_expr)
+    lhs_s, rhs_s = eq_s.split("=", 1)
+    lhs, rhs = parse_math(lhs_s), parse_math(rhs_s)
+    if lhs is None or rhs is None:
+        return error_result(latex_expr, r"Ejemplo: `x^2 + y^2 = 25, \frac{dy}{dx}`")
+    F = lhs - rhs
+    yl, xl = sp.latex(y), sp.latex(x)
+    try:
+        result = sp.simplify(sp.idiff(F, y, x))
+    except Exception as e:
+        logger.warning(f"idiff failed: {e}")
+        return error_result(latex_expr)
+    Fx, Fy = sp.diff(F, x), sp.diff(F, y)
+    steps = [
+        f"La ecuación $${sp.latex(sp.Eq(lhs, rhs))}$$ define ${yl}$ **implícitamente** como función de ${xl}$.",
+        f"Derivamos ambos miembros respecto de ${xl}$, tratando ${yl} = {yl}({xl})$: cada vez que derivamos una expresión en ${yl}$ "
+        f"aparece el factor $\\frac{{d{yl}}}{{d{xl}}}$ (**regla de la cadena**).",
+        f"Agrupamos los términos con $\\frac{{d{yl}}}{{d{xl}}}$ y despejamos. Es equivalente a usar "
+        f"$$\\frac{{d{yl}}}{{d{xl}}} = -\\frac{{F_{{{xl}}}}}{{F_{{{yl}}}}} = -\\frac{{{sp.latex(Fx)}}}{{{sp.latex(Fy)}}}$$",
+        f"**Resultado:** $$\\frac{{d{yl}}}{{d{xl}}} = {sp.latex(result)}$$",
+    ]
+    return {"symbolic": str(F), "final_latex": f"\\frac{{d{yl}}}{{d{xl}}} = {sp.latex(result)}", "steps": steps,
+            "answer": result, "show_graph": False}
+
+
+_PARTIAL = re.compile(r"\\frac\{\\partial(?:\^\{?(\d+)\}?)?\s*\}\{((?:[^{}]|\{[^{}]*\})*)\}\s*(.+)$")
+_DEFINITION = re.compile(r"^\s*[fghy]\s*(?:\(\s*[a-z]\s*\))?\s*=\s*(.+)$")
+
+
+def solve_partial_derivative(expr, variables: list[tuple]) -> dict:
+    """∂^n f / ∂x ∂y ...: differentiate once per variable in the denominator."""
+    result = sp.simplify(sp.diff(expr, *variables))
+    denom = " ".join(f"\\partial {sp.latex(v)}" + (f"^{{{k}}}" if k > 1 else "") for v, k in variables)
+    total = sum(k for _, k in variables)
+    op = f"\\frac{{\\partial{'^{' + str(total) + '}' if total > 1 else ''}}}{{{denom}}}"
+    others = sorted({s for s in expr.free_symbols} - {v for v, _ in variables}, key=lambda s: s.name)
+    steps = [f"Calculamos la **derivada parcial** $${op}\\left({sp.latex(expr)}\\right)$$"]
+    if others:
+        steps.append("Las demás variables (" + ", ".join(f"${sp.latex(s)}$" for s in others) + ") se tratan como **constantes**.")
+    current = expr
+    for v, k in variables:
+        for _ in range(k):
+            current = sp.simplify(sp.diff(current, v))
+            steps.append(f"Derivamos respecto de ${sp.latex(v)}$: $${sp.latex(current)}$$")
+    steps.append(f"**Resultado:** $${op}\\left({sp.latex(expr)}\\right) = {sp.latex(result)}$$")
+    return {"symbolic": str(sp.Derivative(expr, *variables)), "final_latex": sp.latex(result),
+            "steps": steps, "answer": result, "show_graph": False}
+
+
 def solve_derivative(latex_expr: str) -> dict:
     cleaned = clean_latex(latex_expr)
+    if implicit_request(cleaned):
+        return solve_implicit_derivative(cleaned)
+    m = _PARTIAL.search(cleaned)
+    if m:
+        variables = [(sp.Symbol(v), int(k or 1)) for v, k in re.findall(r"\\partial\s*([a-z])(?:\^\{?(\d+)\}?)?", m.group(2))]
+        expr = parse_math(_strip_outer_parens(m.group(3)))
+        if not variables or expr is None:
+            return error_result(latex_expr, r"Ejemplo: `\frac{\partial^2}{\partial x \partial y}(x^2 y^3)`")
+        return solve_partial_derivative(expr, variables)
+    # "derivar f(x) = x^3": differentiate the right-hand side of the definition
+    m = _DEFINITION.match(cleaned)
+    if m and not re.search(r"\\frac\{d|'", cleaned):
+        cleaned = m.group(1)
     parsed = _parse_derivative(cleaned)
-    if parsed is None or parsed[0] is None:
+    if parsed is None or parsed[0] is None or not isinstance(parsed[0], sp.Expr):
         return error_result(latex_expr)
     expr, var, order = parsed
     v = sp.latex(var)
 
     try:
-        result = sp.simplify(sp.diff(expr, var, order))
+        if expr.has(sp.Abs, sp.sign):
+            # d|x|/dx is sign(x) over the reals; with a complex symbol SymPy returns re/im expressions
+            real_var = sp.Symbol(var.name, real=True)
+            result = sp.simplify(sp.diff(expr.xreplace({var: real_var}), real_var, order)).xreplace({real_var: var})
+        else:
+            result = sp.simplify(sp.diff(expr, var, order))
     except Exception:
         return error_result(latex_expr)
 
@@ -406,6 +616,7 @@ def solve_derivative(latex_expr: str) -> dict:
         "symbolic": str(sp.Derivative(expr, (var, order))),
         "final_latex": sp.latex(result),
         "steps": steps,
+        "answer": result,
         "show_graph": graph is not None,
         "graph": graph,
     }
@@ -482,17 +693,28 @@ def solve_limit(latex_expr: str) -> dict:
             right = sp.limit(expr, var, point, dir='+')
             steps.append(f"Límites laterales: $\\lim_{{{v}\\to {p}^-}} = {sp.latex(left)}$, $\\lim_{{{v}\\to {p}^+}} = {sp.latex(right)}$.")
             steps.append("Como los límites laterales son distintos, **el límite no existe**.")
-            return {"symbolic": str(parsed), "final_latex": r"\text{No existe}", "steps": steps, "show_graph": False}
+            return {"symbolic": str(parsed), "final_latex": r"\text{No existe}", "steps": steps,
+                    "answer": "no_existe", "show_graph": False}
         except Exception as e:
             logger.warning(f"limit failed: {e}")
             return error_result(latex_expr)
 
+    verified = None
     if result.has(sp.AccumBounds):
         steps.append("La función oscila sin acercarse a un valor: **el límite no existe**.")
-        final = r"\text{No existe}"
+        final, answer = r"\text{No existe}", "no_existe"
     else:
         steps.append(f"**Resultado:** $${lim_l} = {sp.latex(result)}$$")
-        final = sp.latex(result)
+        final, answer = sp.latex(result), result
+        verified = _numeric_limit_check(expr, var, point, direction, result)
+        if verified:
+            steps.append(f"✓ Verificación numérica: evaluando la función muy cerca de ${v} = {p}$ los valores se acercan a ${sp.latex(result)}$.")
+        elif verified is False:
+            logger.warning(f"Numeric check disagrees with limit {parsed} = {result}")
+            return {"symbolic": str(parsed), "final_latex": r"\text{No se pudo verificar}",
+                    "steps": steps[:-1] + ["⚠ El cálculo simbólico y la verificación numérica no coinciden, "
+                                           "así que no mostramos un resultado que podría ser incorrecto."],
+                    "show_graph": False, "ok": False}
 
     graph = None
     if expr.free_symbols == {var}:
@@ -508,6 +730,36 @@ def solve_limit(latex_expr: str) -> dict:
         "symbolic": str(parsed),
         "final_latex": final,
         "steps": steps,
+        "answer": answer,
+        "verified": verified,
         "show_graph": graph is not None,
         "graph": graph,
     }
+
+
+def _numeric_limit_check(expr, var, point, direction, result) -> bool | None:
+    """
+    Evaluate the function ever closer to the point (80-digit arithmetic) and compare
+    with the symbolic limit. Some limits converge very slowly (1/ln x), so instead of
+    demanding closeness at one point it accepts an error that clearly shrinks.
+    False means the numbers contradict the symbolic result.
+    """
+    if not (result.is_number and result.is_finite) or not point.is_number:
+        return None
+    scales = [sp.Integer(10) ** k for k in (6, 12, 24)]
+    if point in (sp.oo, -sp.oo):
+        sides = [[point / abs(point) * s for s in scales]]
+    else:
+        sides = [[point + sign / s for s in scales]
+                 for sign in {"+": [1], "-": [-1]}.get(direction, [-1, 1])]
+    target = complex(sp.N(result, 30))
+    tol = 1e-6 * (1 + abs(target))
+    for probes in sides:
+        try:
+            # evalf with a Float substitution: an exact (1 + 10^-24)^(10^24) would never finish
+            errors = [abs(complex(expr.evalf(80, subs={var: sp.Float(p, 90)})) - target) for p in probes]
+        except (TypeError, ValueError):
+            return None
+        if errors[-1] > tol and not errors[-1] < 0.75 * errors[0]:
+            return False
+    return True

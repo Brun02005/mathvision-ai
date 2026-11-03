@@ -12,7 +12,9 @@ import logging
 
 import sympy as sp
 
-from engines.math.common import clean_latex, parse_math, split_top_level, error_result
+from engines.math.common import (
+    clean_latex, parse_math, split_top_level, error_result, unsolved_result, satisfies,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +137,7 @@ def solve_physics(latex_expr: str, sub_domain: str = "Física") -> dict:
         isolated = sp.solve(eq, target)
     except Exception as e:
         logger.warning(f"physics solve failed: {e}")
-        isolated = []
+        return unsolved_result(eq, steps, f"No se pudo despejar ${t_l}$ de la fórmula.")
     if not isolated:
         return {"symbolic": str(eq), "final_latex": r"\text{Sin solución}",
                 "steps": steps + ["No se pudo despejar la incógnita."], "show_graph": False}
@@ -159,9 +161,15 @@ def solve_physics(latex_expr: str, sub_domain: str = "Física") -> dict:
         sp.latex(v) + (f" \\approx {sp.latex(sp.N(v, 5))}" if v.is_number and not v.is_Rational else "")
         for v in values)
     steps.append(f"**Resultado:** $${t_l} = {val_l}$$")
+    checks = [satisfies(eq, {**known, target: v}) for v in values]
+    verified = True if checks and all(c is True for c in checks) else None
+    if verified:
+        steps.append("✓ Verificación: reemplazando todos los valores en la fórmula, la igualdad se cumple.")
     return {
+        "verified": verified,
         "symbolic": str(eq),
         "final_latex": f"{t_l} = {val_l}",
         "steps": steps,
+        "answer": values[0] if len(values) == 1 else sp.FiniteSet(*values),
         "show_graph": False,
     }

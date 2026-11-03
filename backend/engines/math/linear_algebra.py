@@ -6,9 +6,9 @@ import re
 import logging
 
 import sympy as sp
-from sympy.parsing.sympy_parser import parse_expr, standard_transformations
+from sympy.parsing.sympy_parser import standard_transformations
 
-from engines.math.common import clean_latex, parse_math, error_result
+from engines.math.common import clean_latex, parse_math, error_result, safe_parse_expr
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ def _to_python(s: str) -> str:
     s = re.sub(r"\\operatorname\{(rank|rg|tr)\}", r"\1", s)
     s = re.sub(r"\^\{?\s*-1\s*\}?", "**(-1)", s)
     s = re.sub(r"\^\{?\s*(T|t|\\top)\s*\}?", ".T", s)
+    s = re.sub(r"\^\{?\s*(\d+)\s*\}?", r"**\1", s)  # A^2, A^{3}
     s = s.replace(r"\cdot", "*").replace(r"\times", "*").replace("{", "(").replace("}", ")")
     s = re.sub(r"\\frac\((.+?)\)\((.+?)\)", r"((\1)/(\2))", s)
     s = s.replace("\\", "")
@@ -55,11 +56,13 @@ def _to_python(s: str) -> str:
     return s.strip()
 
 
-def _matrix_steps(A: sp.ImmutableMatrix, name: str = "A") -> tuple[list, str]:
+def _matrix_steps(A: sp.ImmutableMatrix, name: str = "A") -> tuple[list, str, dict]:
     steps = [f"Tenemos la matriz $${name} = {sp.latex(A)}$$ de dimensión ${A.rows} \\times {A.cols}$."]
     summary = []
+    info = {}
 
     rank = A.rank()
+    info["rank"] = sp.Integer(rank)
     rref, pivots = A.rref()
     steps.append(f"**Forma escalonada reducida** (Gauss-Jordan): $${sp.latex(rref)}$$")
     steps.append(f"**Rango:** $\\operatorname{{rg}}({name}) = {rank}$ (cantidad de pivotes).")
@@ -75,11 +78,13 @@ def _matrix_steps(A: sp.ImmutableMatrix, name: str = "A") -> tuple[list, str]:
         else:
             steps.append(f"**Determinante** (desarrollo por cofactores): $$\\det({name}) = {sp.latex(det)}$$")
         summary.append(f"\\det({name}) = {sp.latex(det)}")
+        info["det"] = det
 
         if det != 0:
             inv = sp.simplify(A.inv())
             steps.append(f"Como $\\det({name}) \\neq 0$, la matriz es **invertible**: $${name}^{{-1}} = \\frac{{1}}{{\\det {name}}}\\operatorname{{adj}}({name}) = {sp.latex(inv)}$$")
             summary.append(f"{name}^{{-1}} = {sp.latex(inv)}")
+            info["inverse"] = inv
         else:
             steps.append(f"Como $\\det({name}) = 0$, la matriz es **singular** (no invertible).")
 
@@ -94,13 +99,14 @@ def _matrix_steps(A: sp.ImmutableMatrix, name: str = "A") -> tuple[list, str]:
                     steps.append(f"Autovalor $\\lambda = {sp.latex(val)}$ (multiplicidad {mult}) con autovector(es): $${vecs_l}$$")
                 vals_l = ",\\; ".join(sp.latex(v) for v, _, _ in eig)
                 summary.append(f"\\lambda \\in \\left\\{{{vals_l}\\right\\}}")
+                info["eigenvalues"] = sp.FiniteSet(*(v for v, _, _ in eig))
                 if A.is_diagonalizable():
                     steps.append(f"Hay una base de autovectores: ${name}$ es **diagonalizable**.")
             except Exception as e:
                 logger.warning(f"eigenvects failed: {e}")
 
     final = r"\begin{array}{l} " + r" \\ ".join(summary) + r" \end{array}"
-    return steps, final
+    return steps, final, info
 
 
 def solve_linear_algebra(latex_expr: str) -> dict:
@@ -115,8 +121,9 @@ def solve_linear_algebra(latex_expr: str) -> dict:
     py = _to_python(expr_s)
 
     if re.fullmatch(r"M0", py):
-        steps, final = _matrix_steps(matrices["M0"])
-        return {"symbolic": str(matrices["M0"]), "final_latex": final, "steps": steps, "show_graph": False}
+        steps, final, info = _matrix_steps(matrices["M0"])
+        return {"symbolic": str(matrices["M0"]), "final_latex": final, "steps": steps,
+                "answer": info, "show_graph": False}
 
     local = dict(matrices)
     local.update({
@@ -126,17 +133,23 @@ def solve_linear_algebra(latex_expr: str) -> dict:
         "tr": lambda m: m.trace(),
     })
     try:
-        result = parse_expr(py, local_dict=local, transformations=standard_transformations)
+        # Only safe_parse_expr may evaluate text that came from the user
+        result = safe_parse_expr(py, local_dict=local, transformations=standard_transformations,
+                                 allow_transpose=True)
         if isinstance(result, sp.MatrixBase):
             result = sp.simplify(result)
     except Exception as e:
-        logger.warning(f"matrix expression failed: {py!r}: {e}")
-        msg = str(e)
-        hint = None
-        if "shape" in msg.lower() or "dimension" in msg.lower():
-            hint = "Las dimensiones de las matrices no son compatibles para esta operación."
-        elif "invertible" in msg.lower() or "det" in msg.lower():
-            hint = "La matriz no es invertible (determinante nulo)."
+        logger.warning(f"matrix expression failed: {type(e).__name__}")
+        logger.debug(f"matrix expression {py!r}: {e}")
+        msg = str(e).lower()
+        if isinstance(e, sp.matrices.exceptions.NonInvertibleMatrixError) or "invertible" in msg:
+            # A singular matrix is a legitimate mathematical answer, not a parsing error
+            return {"symbolic": py, "final_latex": r"\text{No existe la inversa } (\det = 0)",
+                    "steps": ["Para invertir una matriz necesitamos $\\det A \\neq 0$.",
+                              "El determinante es $0$: la matriz es **singular** y **no tiene inversa**."],
+                    "answer": "no_existe", "show_graph": False}
+        hint = ("Las dimensiones de las matrices no son compatibles para esta operación."
+                if "shape" in msg or "dimension" in msg else None)
         return error_result(latex_expr, hint)
 
     names = {k: chr(ord("A") + i) for i, k in enumerate(matrices)}
@@ -154,4 +167,4 @@ def solve_linear_algebra(latex_expr: str) -> dict:
         steps.append("La **transpuesta** intercambia filas por columnas.")
     steps.append(f"**Resultado:** $${sp.latex(result)}$$")
 
-    return {"symbolic": pretty, "final_latex": sp.latex(result), "steps": steps, "show_graph": False}
+    return {"symbolic": pretty, "final_latex": sp.latex(result), "steps": steps, "answer": result, "show_graph": False}

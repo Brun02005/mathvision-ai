@@ -88,6 +88,7 @@ def solve_ode(latex_expr: str) -> dict:
         return error_result(latex_expr, "No se encontró ninguna derivada de la función incógnita.")
 
     ics = {}
+    conditions = []  # (derivative order, point, value) to verify the final solution
     for ic in ic_parts:
         m = _IC.match(ic)
         if not m:
@@ -98,6 +99,10 @@ def solve_ode(latex_expr: str) -> dict:
             continue
         key = y.subs(t, point) if order == 0 else y.diff(t, order).subs(t, point)
         ics[key] = value
+        conditions.append((order, point, value))
+    if len(conditions) != len(ic_parts):
+        # Silently dropping a condition would return the general solution as if it were the answer
+        return error_result(latex_expr, "No se pudieron leer todas las condiciones iniciales. Formato: `y(0) = 1, y'(0) = 0`.")
 
     order = sp.ode_order(eq, y)
     steps = [f"Tenemos la **ecuación diferencial ordinaria de orden {order}**: $${sp.latex(eq)}$$"]
@@ -146,11 +151,16 @@ def solve_ode(latex_expr: str) -> dict:
     for s_l in sol_ls:
         steps.append(f"$${s_l}$$")
 
+    verified = None
     try:
-        if all(sp.checkodesol(eq, s_)[0] for s_ in sols):
-            steps.append("✓ Verificación: sustituyendo la solución en la ecuación, la igualdad se cumple.")
+        verified = all(sp.checkodesol(eq, s_)[0] for s_ in sols)
+        if verified and ics:
+            verified = all(sp.simplify(sp.diff(s_.rhs, t, k).subs(t, p) - v) == 0
+                           for s_ in sols for k, p, v in conditions)
+        if verified:
+            steps.append("✓ Verificación: sustituyendo la solución en la ecuación (y en las condiciones iniciales), la igualdad se cumple.")
     except Exception:
-        pass
+        verified = None
 
     graph = None
     rhs_sol = sols[0].rhs
@@ -168,6 +178,8 @@ def solve_ode(latex_expr: str) -> dict:
         "symbolic": str(eq),
         "final_latex": r" \\ ".join(sol_ls) if len(sol_ls) > 1 else sol_ls[0],
         "steps": steps,
+        "answer": sols[0].rhs if len(sols) == 1 else [s_.rhs for s_ in sols],
+        "verified": verified or None,
         "show_graph": graph is not None,
         "graph": graph,
     }

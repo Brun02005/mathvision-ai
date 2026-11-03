@@ -1,55 +1,94 @@
 """
 Series and sequences: finite sums, convergence of infinite series and their value.
+
+A divergent series must never be shown with a number: partial sums of
+Σ 1/√n can be evaluated to a huge value that looks like an answer. The value is
+only reported when convergence is established (by a criterion or by SymPy).
 """
 import logging
 
 import sympy as sp
 
-from engines.math.common import clean_latex, parse_math, error_result
+from engines.math.common import clean_latex, parse_math, error_result, unsolved_result
 
 logger = logging.getLogger(__name__)
 
 
-def _convergence_test(term, n) -> list[str]:
-    """Explain a convergence criterion that applies to the general term."""
+def _is_alternating(term, n) -> bool:
+    try:
+        signs = {sp.sign(sp.N(term.subs(n, k))) for k in range(1000, 1006)}
+    except Exception:
+        return False
+    return signs == {1, -1}
+
+
+def _convergence_test(term, n, start) -> tuple[list[str], str | None]:
+    """Explain a convergence criterion that applies. Returns (steps, "converge" | "diverge" | None)."""
     steps = []
     try:
         lim_term = sp.limit(term, n, sp.oo)
         if lim_term != 0:
-            steps.append(
-                f"**Condición necesaria:** $\\lim_{{n\\to\\infty}} a_n = {sp.latex(lim_term)} \\neq 0$, "
-                "por lo tanto la serie **diverge**."
-            )
-            return steps
+            shown = sp.latex(lim_term) if not lim_term.has(sp.AccumBounds) else r"\text{no existe}"
+            steps.append(f"**Condición necesaria:** $\\lim_{{n\\to\\infty}} a_n = {shown} \\neq 0$, "
+                         "por lo tanto la serie **diverge**.")
+            return steps, "diverge"
         steps.append(r"**Condición necesaria:** $\lim_{n\to\infty} a_n = 0$ (se cumple, pero no alcanza para asegurar convergencia).")
     except Exception:
         pass
 
-    # p-series / comparison with 1/n^p
+    alternating = _is_alternating(term, n)
+    if alternating:
+        # Leibniz: (-1)^n b_n with b_n decreasing to 0 converges (maybe only conditionally)
+        b = sp.Abs(term)
+        try:
+            far = [sp.N(b.subs(n, k)) for k in (10**3, 2 * 10**3, 4 * 10**3)]
+            if sp.limit(b, n, sp.oo) == 0 and far[0] > far[1] > far[2]:
+                steps.append("Es una **serie alternada** y $|a_n|$ decrece a $0$: por el **criterio de Leibniz**, la serie **converge**.")
+                return steps, "converge"
+        except Exception:
+            pass
+
+    # Limit comparison with 1/n^p: only valid when a_n · n^p tends to a finite non-zero constant.
+    # With terms of changing sign it only proves ABSOLUTE convergence, never divergence.
     try:
         p = sp.limit(-sp.log(sp.Abs(term)) / sp.log(n), n, sp.oo)
-        if p.is_number and p.is_finite and not term.has(sp.exp) and not any(
-                isinstance(q, sp.Pow) and q.exp.has(n) for q in term.atoms(sp.Pow)):
-            verdict = "converge" if p > 1 else "diverge"
-            steps.append(
-                f"Comparamos con la **serie p** $\\sum \\frac{{1}}{{n^p}}$: el término general se comporta como "
-                f"$\\frac{{1}}{{n^{{{sp.latex(p)}}}}}$, con $p = {sp.latex(p)}$ ⇒ {verdict} (converge sii $p > 1$)."
-            )
-            return steps
+        if p.is_number and p.is_finite and not (alternating and p <= 1):
+            ratio = sp.limit(sp.Abs(term) * n**p, n, sp.oo)
+            if ratio.is_positive and ratio.is_finite:
+                verdict = "converge" if p > 1 else "diverge"
+                steps.append(
+                    f"**Comparación por paso al límite** con la serie p $\\sum \\frac{{1}}{{n^p}}$: "
+                    f"$\\lim_{{n\\to\\infty}} |a_n|\\, n^{{{sp.latex(p)}}} = {sp.latex(ratio)}$, finito y no nulo, "
+                    f"y como $p = {sp.latex(p)}$ la serie **{verdict}** (la serie p converge si y solo si $p > 1$).")
+                return steps, verdict
     except Exception:
         pass
 
-    # Ratio test (useful with factorials and exponentials)
+    # Ratio test (factorials and exponentials)
     try:
         ratio = sp.limit(sp.Abs(sp.simplify(term.subs(n, n + 1) / term)), n, sp.oo)
-        if ratio.is_number:
-            verdict = ("converge" if ratio < 1 else "diverge" if ratio > 1 else "no concluyente")
-            steps.append(
-                f"**Criterio del cociente (D'Alembert):** $\\lim_{{n\\to\\infty}} \\left|\\frac{{a_{{n+1}}}}{{a_n}}\\right| = {sp.latex(ratio)}$ ⇒ {verdict}."
-            )
+        if ratio.is_number and ratio != 1:
+            verdict = "converge" if ratio < 1 else "diverge"
+            steps.append(f"**Criterio del cociente (D'Alembert):** $\\lim_{{n\\to\\infty}} \\left|\\frac{{a_{{n+1}}}}{{a_n}}\\right| "
+                         f"= {sp.latex(ratio)}$ ⇒ la serie **{verdict}**.")
+            return steps, verdict
     except Exception:
         pass
-    return steps
+
+    # Integral test, for terms that are eventually positive and decreasing
+    try:
+        far = [sp.N(term.subs(n, k)) for k in (10**3, 2 * 10**3, 4 * 10**3)]
+        if all(v.is_positive for v in far) and far[0] > far[1] > far[2]:
+            t = sp.Symbol("t", positive=True)
+            area = sp.integrate(term.subs(n, t), (t, max(start, 2), sp.oo))
+            if not area.has(sp.Integral):
+                verdict = "diverge" if area in (sp.oo, sp.zoo) else "converge"
+                steps.append(f"**Criterio de la integral:** el término es positivo y decreciente, y "
+                             f"$\\int^{{\\infty}} {sp.latex(term.subs(n, t))}\\,dt = {sp.latex(area)}$ ⇒ la serie **{verdict}**.")
+                return steps, verdict
+    except Exception:
+        pass
+    return steps, None
 
 
 def solve_series(latex_expr: str) -> dict:
@@ -66,8 +105,20 @@ def solve_series(latex_expr: str) -> dict:
              f"Término general: $a_{{{sp.latex(n)}}} = {sp.latex(term)}$"]
 
     infinite = b in (sp.oo, -sp.oo)
+    verdict = None
     if infinite and not is_product:
-        steps.extend(_convergence_test(term, n))
+        test_steps, verdict = _convergence_test(term, n, a)
+        steps.extend(test_steps)
+        if verdict is None:
+            try:
+                converges = parsed.is_convergent()
+                verdict = {True: "converge", False: "diverge"}.get(bool(converges)) if converges in (True, False) else None
+            except Exception:
+                verdict = None
+        if verdict == "diverge":
+            steps.append("**Conclusión:** la serie **diverge**.")
+            return {"symbolic": str(parsed), "final_latex": r"\text{Diverge}", "steps": steps,
+                    "answer": "diverge", "show_graph": False}
 
     try:
         value = sp.simplify(parsed.doit())
@@ -75,22 +126,23 @@ def solve_series(latex_expr: str) -> dict:
         logger.warning(f"series doit failed: {e}")
         value = parsed
 
-    if infinite and not is_product:
-        try:
-            converges = parsed.is_convergent()
-        except Exception:
-            converges = None
-        if converges is False or value in (sp.oo, -sp.oo):
-            steps.append("**Conclusión:** la serie **diverge**.")
-            return {"symbolic": str(parsed), "final_latex": r"\text{Diverge}", "steps": steps, "show_graph": False}
+    if infinite and not is_product and (value in (sp.oo, -sp.oo, sp.zoo) or value.has(sp.AccumBounds, sp.nan)):
+        steps.append("**Conclusión:** la serie **diverge**.")
+        return {"symbolic": str(parsed), "final_latex": r"\text{Diverge}", "steps": steps,
+                "answer": "diverge", "show_graph": False}
 
-    if isinstance(value, (sp.Sum, sp.Product)):
+    answer = value
+    if isinstance(value, (sp.Sum, sp.Product)) or value.has(sp.Sum):
+        if infinite and verdict != "converge":
+            return unsolved_result(parsed, steps, "No pudimos determinar si la serie converge, así que no mostramos un valor.")
         try:
             approx = sp.N(parsed, 10)
-            steps.append(f"No hay forma cerrada conocida; el valor numérico es $\\approx {sp.latex(approx)}$.")
-            final = f"\\approx {sp.latex(approx)}"
         except Exception:
-            final = r"\text{Converge (sin forma cerrada)}"
+            approx = None
+        if approx is None or not approx.is_number:
+            return unsolved_result(parsed, steps, "La serie converge, pero no pudimos calcular su suma.")
+        steps.append(f"No hay forma cerrada conocida; el valor numérico es $\\approx {sp.latex(approx)}$.")
+        final, answer = f"\\approx {sp.latex(approx)}", approx
     else:
         if not infinite and not is_product:
             steps.append("Es una **suma finita**; usamos fórmulas cerradas de sumatorias (p. ej. $\\sum k = \\frac{n(n+1)}{2}$).")
@@ -103,4 +155,4 @@ def solve_series(latex_expr: str) -> dict:
             final += f" \\approx {sp.latex(sp.N(value, 6))}"
         steps.append(f"**Resultado:** $${sum_l} = {final}$$")
 
-    return {"symbolic": str(parsed), "final_latex": final, "steps": steps, "show_graph": False}
+    return {"symbolic": str(parsed), "final_latex": final, "steps": steps, "answer": answer, "show_graph": False}

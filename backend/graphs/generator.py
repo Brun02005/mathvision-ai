@@ -10,6 +10,7 @@ expressions they already computed, so nothing is re-parsed from LaTeX:
         "x_range": (-10, 10),                           # optional
         "points": [{"x": 2, "y": 0, "label": "raíz"}],  # optional markers
         "fill": {"a": 0, "b": 3.14},                    # optional shaded area under curves[0]
+        "vlines": [{"x": 1, "label": "asíntota x = 1"}], # optional vertical lines (asymptotes)
     }
 """
 import logging
@@ -108,6 +109,16 @@ def generate_graph(spec: dict, n_points: int = 600) -> dict | None:
                 })
             except Exception as e:
                 logger.warning(f"Area fill failed: {e}")
+
+    shown = [v for t in traces for v in t["y"] if v is not None]
+    y_lo, y_hi = (min(shown), max(shown)) if shown else (-clip, clip)
+    for line in spec.get("vlines", []):
+        vx = _safe_float(line.get("x"))
+        if vx is not None and a <= vx <= b:
+            traces.append({
+                "x": [vx, vx], "y": [y_lo, y_hi], "type": "scatter", "mode": "lines",
+                "name": line.get("label", f"x = {vx}"), "line": {"color": "#94a3b8", "width": 1.5, "dash": "dot"},
+            })
 
     markers = []
     for p in spec.get("points", []):

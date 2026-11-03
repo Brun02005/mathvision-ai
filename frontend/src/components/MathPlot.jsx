@@ -24,7 +24,7 @@ export default function MathPlot({ data, layout, style }) {
           autosize: true,
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
-          font: { color: '#e5e7eb', family: 'Inter, sans-serif', size: 12 },
+          font: { color: '#e5e7eb', family: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif', size: 12 },
           margin: { t: 20, r: 20, b: 40, l: 50 },
           legend: { orientation: 'h', y: -0.28 },
           xaxis: { ...(layout?.xaxis || {}), ...AXIS },

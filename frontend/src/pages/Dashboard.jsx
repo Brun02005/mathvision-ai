@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
   Upload, FileText, Image as ImageIcon, Loader2, Calculator, AlertCircle,
@@ -6,25 +6,52 @@ import {
 } from 'lucide-react';
 import SolutionView from '../components/SolutionView';
 import { MathBlock } from '../components/Latex';
-import { solveFromText, uploadProblem, errorMessage } from '../services/api';
+import MathInput, { TEMPLATES, hasEmptyBoxes } from '../components/MathInput';
+import { Link } from 'react-router-dom';
+import { solveFromText, uploadProblem, errorMessage, isLimitError } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import useHealth from '../hooks/useHealth';
+import { isPlainText } from '../utils/format';
+
+// What to do with the expression. "auto" lets the server decide from its structure;
+// the same expression can mean different things (x^2 - 4: factor it, or solve x^2 - 4 = 0).
+const OPERATIONS = [
+  ['auto', 'Automático'],
+  ['solve', 'Resolver'],
+  ['simplify', 'Simplificar'],
+  ['factor', 'Factorizar'],
+  ['expand', 'Desarrollar'],
+  ['derivative', 'Derivar'],
+  ['integral', 'Integrar'],
+  ['taylor', 'Taylor'],
+  ['partial_fractions', 'Fracciones parciales'],
+  ['analyze', 'Análisis de función'],
+  ['statistics', 'Estadística'],
+];
 
 const EXAMPLES = [
-  { label: 'Integral definida', expr: '\\int_{0}^{\\pi} \\sin(x)\\,dx' },
-  { label: 'Fracciones parciales', expr: '\\int \\frac{x^5 + x^4 - 8}{x^3 - 4x}\\,dx' },
-  { label: 'Por partes', expr: '\\int x e^{x}\\,dx' },
-  { label: 'Derivada', expr: '\\frac{d}{dx}(x^2 \\sin(x))' },
-  { label: 'Límite', expr: '\\lim_{x \\to 0} \\frac{\\sin(x)}{x}' },
+  { label: 'Problema en palabras', expr: 'Juan tiene el triple de la edad de su hijo. Dentro de 10 años tendrá el doble. ¿Qué edad tiene el hijo?' },
+  { label: 'Escrito en texto', expr: 'x al cuadrado menos 4 igual a 0' },
   { label: 'Ecuación cuadrática', expr: 'x^2 - 5x + 6 = 0' },
+  { label: 'Ec. logarítmica', expr: '\\log_{2}(x) + \\log_{2}(x-2) = 3' },
+  { label: 'Valor absoluto', expr: '|2x - 3| = 5' },
   { label: 'Sistema de ecuaciones', expr: '2x + 3y = 6; x - y = 1' },
-  { label: 'Análisis de función', expr: 'f(x) = x^3 - 3x' },
-  { label: 'Inecuación', expr: 'x^2 - 4 > 0' },
+  { label: 'Inecuación', expr: '\\frac{x - 1}{x + 2} \\geq 0' },
+  { label: 'Factorizar', expr: 'factorizar x^3 - 8' },
+  { label: 'Simplificar', expr: '\\frac{x^2 - 1}{x^2 + 2x + 1}' },
+  { label: 'Números complejos', expr: '(2 + 3i)(1 - i)' },
+  { label: 'Límite', expr: '\\lim_{x \\to 0} \\frac{\\sin(x)}{x}' },
+  { label: 'Derivada', expr: '\\frac{d}{dx}(x^2 \\sin(x))' },
+  { label: 'Derivada implícita', expr: 'x^2 + y^2 = 25, \\frac{dy}{dx}' },
+  { label: 'Integral por partes', expr: '\\int x e^{x}\\,dx' },
+  { label: 'Integral doble', expr: '\\int_{0}^{1}\\int_{0}^{2} x y \\, dy \\, dx' },
   { label: 'Serie', expr: '\\sum_{n=1}^{\\infty} \\frac{1}{n^2}' },
+  { label: 'Taylor', expr: '\\text{Taylor de } e^{x} \\text{ en } x = 0 \\text{ orden } 4' },
   { label: 'Ec. diferencial', expr: "y'' + y = 0, y(0) = 1, y'(0) = 0" },
   { label: 'Matriz', expr: '\\begin{pmatrix} 2 & 1 \\\\ 1 & 2 \\end{pmatrix}' },
+  { label: 'Producto vectorial', expr: '(1, 2, 3) \\times (4, 5, 6)' },
+  { label: 'Estadística', expr: 'media de 2, 4, 4, 4, 5, 5, 7, 9' },
   { label: 'Física (Newton)', expr: 'F = m a, m = 10 \\text{kg}, a = 5 \\text{m/s^2}' },
-  { label: 'Fracción', expr: '\\frac{3}{4} + \\frac{1}{8}' },
 ];
 
 function StatusBadge({ online, onRetry }) {
@@ -47,13 +74,17 @@ export default function Dashboard() {
   const { online, info, refresh } = useHealth();
 
   const [inputMode, setInputMode] = useState('text');
+  const [operation, setOperation] = useState('auto');
   const [textInput, setTextInput] = useState('');
+  const [editor, setEditor] = useState('math'); // math: visual editor · words: free text / word problems
+  const mathRef = useRef(null);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [limitHit, setLimitHit] = useState(false);
 
   // Release the object URL of the previous preview
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
@@ -78,9 +109,17 @@ export default function Dashboard() {
     maxSize: 10 * 1024 * 1024,
   });
 
+  const switchEditor = (next) => {
+    setEditor(next);
+    setError(null);
+  };
+
   const handleProcess = async () => {
     setError(null);
     if (inputMode === 'text' && !textInput.trim()) return setError('Escribí una expresión matemática.');
+    if (inputMode === 'text' && editor === 'math' && hasEmptyBoxes(textInput)) {
+      return setError('Completá los cuadraditos vacíos del ejercicio antes de resolver.');
+    }
     if (inputMode === 'image' && !file) return setError('Seleccioná una imagen o PDF.');
 
     setResult(null);
@@ -88,13 +127,14 @@ export default function Dashboard() {
     try {
       if (inputMode === 'text') {
         setProcessingMsg('Calculando solución...');
-        setResult(await solveFromText(textInput.trim(), mode));
+        setResult(await solveFromText(textInput.trim(), mode, operation));
       } else {
         setProcessingMsg('Leyendo el ejercicio con OCR...');
-        setResult(await uploadProblem(file, mode));
+        setResult(await uploadProblem(file, mode, operation));
       }
     } catch (err) {
       setError(errorMessage(err));
+      setLimitHit(isLimitError(err));
       if (err.code === 'ERR_NETWORK') refresh();
     } finally {
       setIsProcessing(false);
@@ -141,42 +181,86 @@ export default function Dashboard() {
         ))}
       </div>
 
+      <div>
+        <p id="operation-label" className="label mb-2">¿Qué querés hacer?</p>
+        <div role="radiogroup" aria-labelledby="operation-label" className="flex flex-wrap gap-1.5">
+          {OPERATIONS.map(([value, label]) => (
+            <button key={value} role="radio" aria-checked={operation === value}
+              onClick={() => setOperation(value)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${operation === value
+                ? 'bg-primary text-white border-primary'
+                : 'bg-surfaceLight/60 text-gray-400 border-white/5 hover:text-white hover:border-white/20'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ── Input ── */}
         <div className="flex flex-col gap-3">
           {inputMode === 'text' ? (
             <div className="glass-panel flex flex-col p-5 gap-4">
               <div>
-                <label htmlFor="expr" className="label mb-2 block">Expresión matemática (LaTeX)</label>
-                <textarea
-                  id="expr"
-                  value={textInput}
-                  onChange={(e) => setTextInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleProcess(); }}
-                  placeholder={'Podés escribir:\n  x^2 - 5x + 6 = 0\n  \\int x^2 dx\n  \\lim_{x \\to 0} \\frac{\\sin x}{x}\n\nCtrl+Enter para resolver'}
-                  className="w-full h-36 bg-background/60 border border-white/10 rounded-xl p-4 text-white text-sm font-mono resize-none focus:outline-none focus:border-primary/60 transition-colors placeholder:text-gray-600"
-                />
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="label">Escribí el ejercicio</p>
+                  <div className="flex bg-background/60 rounded-lg p-0.5 border border-white/5 text-xs" role="tablist" aria-label="Forma de escribir">
+                    {[['math', 'Fórmula'], ['words', 'Texto']].map(([value, label]) => (
+                      <button key={value} role="tab" aria-selected={editor === value} onClick={() => switchEditor(value)}
+                        className={`px-3 py-1 rounded-md font-medium ${editor === value ? 'bg-primary text-white' : 'text-gray-400 hover:text-white'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {editor === 'math' ? (
+                  <>
+                    <MathInput ref={mathRef} value={textInput} onChange={setTextInput} onSubmit={handleProcess}
+                      label="Ejercicio" />
+                    <div className="flex flex-wrap gap-1.5 mt-2" aria-label="Insertar">
+                      {TEMPLATES.map(({ label, latex }) => (
+                        <button key={label} type="button" onClick={() => mathRef.current?.insert(latex)}
+                          className="px-2.5 py-1.5 rounded-lg bg-surfaceLight/70 border border-white/10 text-xs text-gray-200 hover:border-primary/50 hover:text-white">
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-2">
+                      Escribí como en el cuaderno: <kbd>/</kbd> hace una fracción, <kbd>^</kbd> un exponente, y los botones arman
+                      integrales, límites y derivadas. Completá los cuadraditos y apretá Enter.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <textarea
+                      id="expr"
+                      aria-label="Ejercicio en texto"
+                      value={textInput}
+                      onChange={(e) => setTextInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleProcess(); }}
+                      placeholder={'Escribilo como lo dirías:\n  integral de arcotangente de x\n  x al cuadrado menos 4 igual a 0\n  Un tren recorre 120 km en 2 horas, ¿a qué velocidad va?\n\nCtrl+Enter para resolver'}
+                      className="w-full h-36 bg-background/60 border border-white/10 rounded-xl p-4 text-white text-sm resize-none focus:outline-none focus:border-primary/60 transition-colors placeholder:text-gray-600"
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">También acepta LaTeX, por ejemplo <code>\int x^2 dx</code>.</p>
+                  </>
+                )}
               </div>
 
-              {textInput.trim() && (
+              {editor === 'words' && online && info && !info.ai && isPlainText(textInput) && (
+                <p className="text-xs text-amber-300/80 bg-amber-400/5 border border-amber-400/10 rounded-xl px-4 py-3">
+                  Los cálculos simples escritos en palabras se resuelven igual. Para enunciados de problemas hace falta el asistente de IA,
+                  que se activa definiendo <code>GEMINI_API_KEY</code> en el backend.
+                </p>
+              )}
+
+              {editor === 'words' && textInput.trim() && !isPlainText(textInput) && (
                 <div className="bg-background/40 border border-white/5 rounded-xl p-4">
                   <p className="label !text-gray-500 mb-2">Vista previa</p>
                   <div className="text-lg text-center"><MathBlock latex={textInput} /></div>
                 </div>
               )}
 
-              <div>
-                <p className="label !text-gray-500 mb-2">Ejemplos rápidos</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {EXAMPLES.map(({ label, expr }) => (
-                    <button key={label} onClick={() => { setTextInput(expr); setError(null); }}
-                      className="text-left px-3 py-2 bg-surfaceLight/60 border border-white/5 rounded-lg hover:border-primary/40 hover:bg-primary/5 transition-all min-w-0">
-                      <span className="text-primary text-xs font-semibold block mb-0.5">{label}</span>
-                      <span className="text-gray-500 text-xs font-mono truncate block">{expr}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           ) : (
             <>
@@ -209,6 +293,17 @@ export default function Dashboard() {
                   </div>
                 )}
               </div>
+              {/* On phones: open the rear camera directly instead of the file picker */}
+              <label className="sm:hidden flex items-center justify-center gap-2 py-3 rounded-xl bg-surfaceLight border border-white/10 text-sm font-medium text-white active:scale-[0.98] cursor-pointer">
+                <Camera size={16} /> Sacar foto del ejercicio
+                <input type="file" accept="image/*" capture="environment" className="sr-only"
+                  onChange={(e) => {
+                    const photo = e.target.files?.[0];
+                    if (!photo) return;
+                    if (photo.size > 10 * 1024 * 1024) return setError('La foto supera los 10 MB.');
+                    onDrop([photo], []);
+                  }} />
+              </label>
               {online && !ocrReady && (
                 <div className="text-xs text-amber-300/80 bg-amber-400/5 border border-amber-400/10 rounded-xl px-4 py-3 flex items-start gap-2">
                   <AlertCircle size={12} className="shrink-0 mt-0.5" />
@@ -221,7 +316,14 @@ export default function Dashboard() {
           {error && (
             <div role="alert" className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-300 animate-fade-in">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              <p>{error}</p>
+              <div className="space-y-2">
+                <p>{error}</p>
+                {limitHit && (
+                  <Link to="/cuenta" className="inline-block px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-hover">
+                    Ver plan Pro
+                  </Link>
+                )}
+              </div>
             </div>
           )}
 
@@ -231,8 +333,29 @@ export default function Dashboard() {
               : 'bg-surfaceLight text-gray-500 cursor-not-allowed'}`}>
             {isProcessing
               ? <><Loader2 className="animate-spin" size={18} />{processingMsg}</>
-              : <><ChevronRight size={18} />Resolver ejercicio{inputMode === 'text' && <span className="hidden sm:inline text-xs opacity-40 ml-1">Ctrl+Enter</span>}</>}
+              : <><ChevronRight size={18} />Resolver ejercicio{inputMode === 'text' && <span className="hidden sm:inline text-xs opacity-40 ml-1">Enter</span>}</>}
           </button>
+
+          {/* Examples after the button: the editor, its errors and "Resolver" stay together */}
+          {inputMode === 'text' && (
+            <div className="glass-panel p-5">
+              <p className="label !text-gray-500 mb-2">Ejemplos para probar</p>
+              <div className="grid grid-cols-2 gap-2">
+                {EXAMPLES.map(({ label, expr }) => (
+                  <button key={label} onClick={() => {
+                    // Word problems and commands go to the text box; formulas to the visual editor
+                    setEditor(isPlainText(expr) || /^[a-záéíóú]/i.test(expr) ? 'words' : 'math');
+                    setTextInput(expr); setOperation('auto'); setError(null);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                    className="text-left px-3 py-2 bg-surfaceLight/60 border border-white/5 rounded-lg hover:border-primary/40 hover:bg-primary/5 transition-all min-w-0">
+                    <span className="text-primary text-xs font-semibold block mb-0.5">{label}</span>
+                    <span className="text-gray-500 text-xs font-mono truncate block">{expr}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Result ── */}

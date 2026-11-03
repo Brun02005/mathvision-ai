@@ -1,15 +1,37 @@
+# Variables: copiá backend/.env.example y frontend/.env.example a un archivo .env junto a este
+# (docker compose lo lee solo) o exportalas antes de `docker compose up --build`.
 services:
   backend:
     build: ./backend
     environment:
+      # Production unless explicitly ENV=development: refuses to start without Supabase, Postgres, etc.
+      ENV: ${ENV:-production}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mathvision.db}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
+      MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
+      PRO_PRICE_ARS: ${PRO_PRICE_ARS:-5000}
     volumes:
       - mathvision-data:/data
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      # Vite inlines these at build time: changing them requires rebuilding the image
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_LEGAL_NAME: ${VITE_LEGAL_NAME:-}
+        VITE_LEGAL_TAX_ID: ${VITE_LEGAL_TAX_ID:-}
+        VITE_LEGAL_ADDRESS: ${VITE_LEGAL_ADDRESS:-}
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
+        VITE_LEGAL_REVIEWED: ${VITE_LEGAL_REVIEWED:-}
     ports:
       - "8080:80"
     depends_on:

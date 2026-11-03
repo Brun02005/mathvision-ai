@@ -11,6 +11,7 @@ backend/temp/
 # Secretos
 .env
 .env.*
+!.env.example
 
 # Caches y editor
 __pycache__/

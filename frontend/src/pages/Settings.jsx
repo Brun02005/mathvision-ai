@@ -80,6 +80,7 @@ export default function Settings() {
             <>
               <Provider name="Gemini" enabled={info.ocr.gemini} />
               <Provider name="pix2tex" enabled={info.ocr.pix2tex} />
+              <Provider name="Asistente IA" enabled={!!info.ai} />
             </>
           )}
           <button onClick={refresh} aria-label="Volver a verificar" className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10">
@@ -88,7 +89,7 @@ export default function Settings() {
         </div>
       </Section>
 
-      <Section icon={Trash2} title="Borrar historial" description="Elimina todos los ejercicios guardados en el servidor. No se puede deshacer.">
+      <Section icon={Trash2} title="Borrar historial" description="Elimina todos tus ejercicios guardados. No se puede deshacer.">
         <button onClick={wipe} disabled={!online}
           className="px-4 py-2 rounded-lg text-sm border border-red-400/30 text-red-400 hover:bg-red-400/10 disabled:opacity-40 disabled:cursor-not-allowed">
           Borrar todo

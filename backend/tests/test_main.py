@@ -8,7 +8,10 @@ from PIL import Image
 
 import config
 import pipeline
+from api import router as api_router
 from main import app
+from ocr import latex_extractor
+from solver_pool import SolverBusy, SolverTimeout
 
 client = TestClient(app)
 
@@ -139,3 +142,47 @@ def test_clear_history():
     client.post("/api/solve-text", data={"latex_expression": "1 + 1"})
     assert client.delete("/api/history").status_code == 204
     assert client.get("/api/history").json()["total"] == 0
+
+
+@pytest.mark.parametrize("error, status", [(SolverTimeout(), 422), (SolverBusy(), 503)])
+def test_solver_limits_become_clear_http_errors(monkeypatch, error, status):
+    def fail(*args):
+        raise error
+    monkeypatch.setattr(api_router, "solve", fail)
+    r = client.post("/api/solve-text", data={"latex_expression": "x = 1"})
+    assert r.status_code == status
+    assert r.json()["detail"]
+
+
+def test_ocr_service_down_is_503_not_blank_image(monkeypatch):
+    monkeypatch.setattr(latex_extractor, "_PROVIDERS", ())
+    before = set(os.listdir(config.UPLOAD_DIR))
+    r = client.post("/api/upload", files={"file": ("foto.png", _png_bytes(), "image/png")})
+    assert r.status_code == 503
+    assert set(os.listdir(config.UPLOAD_DIR)) == before  # the failed upload was cleaned up
+
+
+def test_upload_rejects_content_that_does_not_match_extension():
+    r = client.post("/api/upload", files={"file": ("foto.png", b"MZ\x90\x00 not a png", "image/png")})
+    assert r.status_code == 415
+
+
+def test_operation_parameter_changes_what_is_done():
+    factored = client.post("/api/solve-text", data={"latex_expression": "x^2 - 4", "operation": "factor"}).json()
+    assert factored["final_result_latex"] == r"\left(x - 2\right) \left(x + 2\right)"
+    solved = client.post("/api/solve-text", data={"latex_expression": "x^2 - 4", "operation": "solve"}).json()
+    assert solved["final_result_latex"] == r"x \in \left\{-2,\; 2\right\}"
+    assert solved["verified"] is True
+
+
+def test_unknown_operation_rejected():
+    r = client.post("/api/solve-text", data={"latex_expression": "x", "operation": "hack"})
+    assert r.status_code == 422
+
+
+def test_schema_operations_match_intent():
+    import typing
+
+    import schemas
+    from classifier import intent
+    assert set(typing.get_args(schemas.Operation)) == set(intent.OPERATIONS)

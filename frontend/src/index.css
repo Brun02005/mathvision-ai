@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* System fonts only: no request to Google Fonts (privacy, and it keeps the CSP closed to third parties) */
 
 @tailwind base;
 @tailwind components;

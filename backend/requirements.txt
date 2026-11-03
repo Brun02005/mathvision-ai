@@ -4,6 +4,13 @@ uvicorn==0.54.0
 python-multipart==0.0.32
 python-dotenv==1.2.4
 SQLAlchemy==2.1.6
+alembic==1.20.1
+# Postgres (Supabase) en producción; en desarrollo alcanza con SQLite
+psycopg[binary]==3.3.6
+
+# Cuentas (tokens de Supabase Auth) y cobros (API de Mercado Pago)
+pyjwt[crypto]==2.15.1
+httpx==0.28.1
 
 # Cálculo simbólico. parse_latex de SymPy necesita exactamente ANTLR 4.11
 sympy==1.14.0
